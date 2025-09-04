@@ -22,9 +22,14 @@ func handlerHealth(rw http.ResponseWriter, r *http.Request) {
 
 func (cfg *apiConfig) handlerMetrics(rw http.ResponseWriter, r *http.Request) {
 	currentVisits := cfg.fileserverHits.Load()
-	currentVisitsResp := fmt.Sprintf("Hits: %d", currentVisits)
+	currentVisitsResp := fmt.Sprintf(`<html>
+  <body>
+    <h1>Welcome, Chirpy Admin</h1>
+    <p>Chirpy has been visited %d times!</p>
+  </body>
+</html>`, currentVisits)
 
-	rw.Header().Add("Content-Type", "text/plain; charset=utf-8")
+	rw.Header().Add("Content-Type", "text/html; charset=utf-8")
 	if _, err := rw.Write([]byte(currentVisitsResp)); err != nil {
 		log.Println("couldn't write headers of Metrics API:", err)
 	}

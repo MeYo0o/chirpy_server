@@ -22,11 +22,14 @@ func main() {
 		Handler: mux,
 	}
 
+	// File Server related
 	mux.Handle("/app/", apiCfg.middlewareMetricsInc(handlerHome))
 	mux.HandleFunc("/app/assets/logo.png", handlerLogo)
-	mux.HandleFunc("/healthz", handlerHealth)
-	mux.HandleFunc("/metrics", apiCfg.handlerMetrics)
-	mux.HandleFunc("/reset", apiCfg.handlerResetMetrics)
+
+	// API related
+	mux.HandleFunc("GET /api/healthz", handlerHealth)
+	mux.HandleFunc("GET /admin/metrics", apiCfg.handlerMetrics)
+	mux.HandleFunc("POST /admin/reset", apiCfg.handlerResetMetrics)
 
 	log.Printf("Serving files from %s on port: %d\n", serverIp, serverPort)
 	log.Fatal(chirpyServer.ListenAndServe())
