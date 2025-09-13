@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MeYo0o/chirpy_server/internal/auth"
 	"github.com/MeYo0o/chirpy_server/internal/database"
 	"github.com/google/uuid"
 )
@@ -204,7 +205,8 @@ func (cfg *apiConfig) handlerCreateUser(rw http.ResponseWriter, r *http.Request)
 	rw.Header().Add("Content-Type", "application/json")
 
 	type emailRequest struct {
-		Email string `json:"email"`
+		Password string `json:"password"`
+		Email    string `json:"email"`
 	}
 
 	var emailReq emailRequest
@@ -222,22 +224,31 @@ func (cfg *apiConfig) handlerCreateUser(rw http.ResponseWriter, r *http.Request)
 
 	defer r.Body.Close()
 
-	user, err := cfg.db.CreateUser(r.Context(), database.CreateUserParams{
-		ID:        uuid.New(),
-		Email:     emailReq.Email,
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
-	})
+	hashedPassword, err := auth.HashPassword(emailReq.Password)
+	if err != nil {
+		rw.WriteHeader(403)
+		dat, _ := encodeJson(map[string]any{
+			"messages": "couldn't generate hashed password",
+		})
+		rw.Write(dat)
+		return
+	}
 
-	// EXAMPLE RESPONSE
-	/*
-			{
-		  "id": "50746277-23c6-4d85-a890-564c0044c2fb",
-		  "created_at": "2021-07-07T00:00:00Z",
-		  "updated_at": "2021-07-07T00:00:00Z",
-		  "email": "user@example.com"
-			}
-	*/
+	user, err := cfg.db.CreateUser(r.Context(), database.CreateUserParams{
+		ID:             uuid.New(),
+		Email:          emailReq.Email,
+		HashedPassword: hashedPassword,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	})
+	if err != nil {
+		rw.WriteHeader(401)
+		dat, _ := encodeJson(map[string]any{
+			"messages": "couldn't create the user",
+		})
+		rw.Write(dat)
+		return
+	}
 
 	rw.WriteHeader(201)
 	dat, _ := encodeJson(map[string]any{
@@ -247,7 +258,60 @@ func (cfg *apiConfig) handlerCreateUser(rw http.ResponseWriter, r *http.Request)
 		"updated_at": user.UpdatedAt,
 	})
 	rw.Write(dat)
-	return
+}
+
+func (cfg *apiConfig) handlerLoginUser(rw http.ResponseWriter, r *http.Request) {
+	rw.Header().Add("Content-Type", "application/json")
+
+	type LoginRequest struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+
+	var loginReq LoginRequest
+
+	decoder := json.NewDecoder(r.Body)
+	err := decoder.Decode(&loginReq)
+	if err != nil {
+		rw.WriteHeader(400)
+		dat, _ := encodeJson(map[string]any{
+			"messages": "invalid request",
+		})
+		rw.Write(dat)
+		return
+	}
+
+	defer r.Body.Close()
+
+	user, err := cfg.db.GetUserByEmail(r.Context(), loginReq.Email)
+	if err != nil {
+		rw.WriteHeader(403)
+		dat, _ := encodeJson(map[string]any{
+			"messages": "user not found",
+		})
+		rw.Write(dat)
+		return
+	}
+
+	HashedPassByteSli := []byte(user.HashedPassword)
+	err = auth.ComparePasswordHash(loginReq.Password, string(HashedPassByteSli))
+	if err != nil {
+		rw.WriteHeader(401)
+		dat, _ := encodeJson(map[string]any{
+			"messages": "password is not correct",
+		})
+		rw.Write(dat)
+		return
+	}
+
+	rw.WriteHeader(200)
+	dat, _ := encodeJson(map[string]any{
+		"id":         user.ID,
+		"email":      user.Email,
+		"created_at": user.CreatedAt,
+		"updated_at": user.UpdatedAt,
+	})
+	rw.Write(dat)
 }
 
 func (cfg *apiConfig) handlerMetrics(rw http.ResponseWriter, r *http.Request) {
