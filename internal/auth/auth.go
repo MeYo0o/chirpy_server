@@ -1,6 +1,8 @@
 package auth
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"strings"
@@ -76,14 +78,24 @@ func ValidateJWT(tokenString, tokenSecret string) (uuid.UUID, error) {
 }
 
 func GetBearerToken(headers http.Header) (string, error) {
-	jwt := headers.Get("Authorization")
+	bearerToken := headers.Get("Authorization")
 
-	if jwt == "" {
-		return "", fmt.Errorf("couldn't extract JWT token")
+	if bearerToken == "" {
+		return "", fmt.Errorf("couldn't extract Bearer token")
 	}
 
-	jwt = strings.Replace(jwt, "Bearer ", "", 1)
+	token := strings.Replace(bearerToken, "Bearer ", "", 1)
 
-	return jwt, nil
+	return token, nil
 
+}
+
+func MakeRefreshToken() (string, error) {
+	tokenByteSli := make([]byte, 32)
+	_, err := rand.Read(tokenByteSli)
+	if err != nil {
+		return "", fmt.Errorf("couldn't make refresh token for the user: %w", err)
+	}
+
+	return hex.EncodeToString(tokenByteSli), nil
 }

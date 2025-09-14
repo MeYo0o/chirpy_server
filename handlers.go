@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -126,8 +127,6 @@ func (cfg *apiConfig) handlerCreateChirp(rw http.ResponseWriter, r *http.Request
 		return
 	}
 	defer r.Body.Close()
-
-	fmt.Println(r.Body)
 
 	// check if the request is valid
 	if chirpyPostReq.Body == "" {
@@ -285,11 +284,11 @@ func (cfg *apiConfig) handlerLoginUser(rw http.ResponseWriter, r *http.Request) 
 
 	// default expiry time in seconds, unless modified by the client's request
 	ExpiresInSeconds := time.Hour * 1
+	RefreshTokenExpireIn := time.Hour * 24 * 60
 
 	type LoginRequest struct {
-		Email            string `json:"email"`
-		Password         string `json:"password"`
-		ExpiresInSeconds int    `json:"expires_in_seconds"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
 	}
 
 	var loginReq LoginRequest
@@ -307,11 +306,7 @@ func (cfg *apiConfig) handlerLoginUser(rw http.ResponseWriter, r *http.Request) 
 
 	defer r.Body.Close()
 
-	// check if there is a passed "expiry time" via client's request, if so , set it to the default value
-	if loginReq.ExpiresInSeconds != 0 {
-		ExpiresInSeconds = time.Second * time.Duration(loginReq.ExpiresInSeconds)
-	}
-
+	// Get the user data for password verification
 	user, err := cfg.db.GetUserByEmail(r.Context(), loginReq.Email)
 	if err != nil {
 		rw.WriteHeader(403)
@@ -322,6 +317,7 @@ func (cfg *apiConfig) handlerLoginUser(rw http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Hash the User password
 	HashedPassByteSli := []byte(user.HashedPassword)
 	err = auth.ComparePasswordHash(loginReq.Password, string(HashedPassByteSli))
 	if err != nil {
@@ -333,6 +329,8 @@ func (cfg *apiConfig) handlerLoginUser(rw http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Password is Valid
+	// Generate JWT for the user
 	generatedToken, err := auth.MakeJWT(
 		user.ID,
 		cfg.jwtSecret,
@@ -341,7 +339,83 @@ func (cfg *apiConfig) handlerLoginUser(rw http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		rw.WriteHeader(403)
 		dat, _ := encodeJson(map[string]any{
-			"messages": "couldn't generate a token for the user",
+			"messages": "couldn't generate access token for the user",
+		})
+		rw.Write(dat)
+		return
+	}
+
+	// Also Generate A Refresh Token with 60days so the user can stay longer on the platform
+	refreshToken, err := auth.MakeRefreshToken()
+	if err != nil || refreshToken == "" {
+		rw.WriteHeader(403)
+		dat, _ := encodeJson(map[string]any{
+			"messages": "couldn't generate refresh token for the user",
+		})
+		rw.Write(dat)
+		return
+	}
+	cfg.db.CreateRefreshToken(r.Context(), database.CreateRefreshTokenParams{
+		Token:     refreshToken,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+		ExpiresAt: time.Now().Add(RefreshTokenExpireIn),
+		RevokedAt: sql.NullTime{},
+		UserID:    user.ID,
+	})
+
+	rw.WriteHeader(200)
+	dat, _ := encodeJson(map[string]any{
+		"id":            user.ID,
+		"email":         user.Email,
+		"created_at":    user.CreatedAt,
+		"updated_at":    user.UpdatedAt,
+		"token":         generatedToken,
+		"refresh_token": refreshToken,
+	})
+	rw.Write(dat)
+}
+
+func (cfg *apiConfig) handlerRefreshToken(rw http.ResponseWriter, r *http.Request) {
+	rw.Header().Add("Content-Type", "application/json")
+
+	refreshToken, err := auth.GetBearerToken(r.Header)
+	if err != nil || refreshToken == "" {
+		rw.WriteHeader(401)
+		dat, _ := encodeJson(map[string]any{
+			"messages": "couldn't retrieve refresh token for the user",
+		})
+		rw.Write(dat)
+		return
+	}
+
+	// Fetch the refreshToken from the DB & check if it's still valid/not-expired
+	foundRefreshToken, err := cfg.db.GetRefreshToken(r.Context(), refreshToken)
+	if err != nil || (time.Since(foundRefreshToken.ExpiresAt) > 0) || foundRefreshToken.RevokedAt.Valid {
+		rw.WriteHeader(401)
+		dat, _ := encodeJson(map[string]any{
+			"messages": "either the refresh token is expired or not found",
+		})
+		rw.Write(dat)
+		return
+	}
+
+	// Refresh token is still valid => Create an Access Token for the user, as the current one is expired, that's why this RefreshToken api is called in the first place
+	user, err := cfg.db.GetUserFromRefreshToken(r.Context(), foundRefreshToken.UserID)
+	if err != nil {
+		rw.WriteHeader(404)
+		dat, _ := encodeJson(map[string]any{
+			"messages": "user not found",
+		})
+		rw.Write(dat)
+		return
+	}
+
+	JWT, err := auth.MakeJWT(user.UserID, cfg.jwtSecret, time.Hour*1)
+	if err != nil {
+		rw.WriteHeader(401)
+		dat, _ := encodeJson(map[string]any{
+			"messages": "couldn't create Access Token for the user",
 		})
 		rw.Write(dat)
 		return
@@ -349,13 +423,39 @@ func (cfg *apiConfig) handlerLoginUser(rw http.ResponseWriter, r *http.Request) 
 
 	rw.WriteHeader(200)
 	dat, _ := encodeJson(map[string]any{
-		"id":         user.ID,
-		"email":      user.Email,
-		"created_at": user.CreatedAt,
-		"updated_at": user.UpdatedAt,
-		"token":      generatedToken,
+		"token": JWT,
 	})
 	rw.Write(dat)
+}
+
+func (cfg *apiConfig) handlerRevokeRefreshToken(rw http.ResponseWriter, r *http.Request) {
+	rw.Header().Add("Content-Type", "application/json")
+
+	refreshToken, err := auth.GetBearerToken(r.Header)
+	if err != nil || refreshToken == "" {
+		rw.WriteHeader(401)
+		dat, _ := encodeJson(map[string]any{
+			"messages": "couldn't retrieve refresh token for the user",
+		})
+		rw.Write(dat)
+		return
+	}
+
+	err = cfg.db.UpdateRefreshToken(r.Context(), database.UpdateRefreshTokenParams{
+		RevokedAt: sql.NullTime{Time: time.Now(), Valid: true},
+		UpdatedAt: time.Now(),
+		Token:     refreshToken,
+	})
+	if err != nil {
+		rw.WriteHeader(403)
+		dat, _ := encodeJson(map[string]any{
+			"messages": "couldn't update the Refresh token record.",
+		})
+		rw.Write(dat)
+		return
+	}
+
+	rw.WriteHeader(204)
 }
 
 func (cfg *apiConfig) handlerMetrics(rw http.ResponseWriter, r *http.Request) {
