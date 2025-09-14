@@ -17,6 +17,7 @@ type apiConfig struct {
 	fileserverHits atomic.Int32
 	db             *database.Queries
 	platform       string
+	jwtSecret      string
 }
 
 func main() {
@@ -38,9 +39,13 @@ func main() {
 	// DB Queries instance => for doing SQLC queries
 	dbQueries := database.New(db)
 
+	// JWT Secret
+	jwtSecret := os.Getenv("JWT_SECRET")
+
 	cfg := apiConfig{
-		db:       dbQueries,
-		platform: platform,
+		db:        dbQueries,
+		platform:  platform,
+		jwtSecret: jwtSecret,
 	}
 
 	mux := http.NewServeMux()

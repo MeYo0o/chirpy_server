@@ -2,6 +2,8 @@ package auth
 
 import (
 	"fmt"
+	"net/http"
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -71,4 +73,17 @@ func ValidateJWT(tokenString, tokenSecret string) (uuid.UUID, error) {
 	}
 
 	return uuid.Parse(userID)
+}
+
+func GetBearerToken(headers http.Header) (string, error) {
+	jwt := headers.Get("Authorization")
+
+	if jwt == "" {
+		return "", fmt.Errorf("couldn't extract JWT token")
+	}
+
+	jwt = strings.Replace(jwt, "Bearer ", "", 1)
+
+	return jwt, nil
+
 }

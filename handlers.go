@@ -108,11 +108,10 @@ func (cfg *apiConfig) handlerGetSingleChirp(rw http.ResponseWriter, r *http.Requ
 func (cfg *apiConfig) handlerCreateChirp(rw http.ResponseWriter, r *http.Request) {
 	rw.Header().Add("Content-Type", "application/json")
 
-	type chirpPostReq struct {
-		Body   string `json:"body"`
-		UserId string `json:"user_id"`
+	type ChirpyPostReq struct {
+		Body string `json:"body"`
 	}
-	chirpyPostReq := chirpPostReq{}
+	chirpyPostReq := ChirpyPostReq{}
 
 	msg := make([]byte, 0)
 
@@ -128,12 +127,44 @@ func (cfg *apiConfig) handlerCreateChirp(rw http.ResponseWriter, r *http.Request
 	}
 	defer r.Body.Close()
 
+	fmt.Println(r.Body)
+
+	// check if the request is valid
+	if chirpyPostReq.Body == "" {
+		msg, _ = encodeJson(map[string]any{
+			"error": "invalid request",
+		})
+		rw.WriteHeader(400)
+		rw.Write(msg)
+		return
+	}
+
 	// to this point, we have a valid chirpValidateParams
 	if len(chirpyPostReq.Body) > 140 {
 		msg, _ = encodeJson(map[string]any{
 			"error": "Something went wrong",
 		})
 		rw.WriteHeader(400)
+		rw.Write(msg)
+		return
+	}
+
+	userToken, err := auth.GetBearerToken(r.Header)
+	if err != nil || userToken == "" {
+		msg, _ = encodeJson(map[string]any{
+			"error": "unauthorized: invalid user JWT",
+		})
+		rw.WriteHeader(401)
+		rw.Write(msg)
+		return
+	}
+
+	userUUID, err := auth.ValidateJWT(userToken, cfg.jwtSecret)
+	if err != nil {
+		msg, _ = encodeJson(map[string]any{
+			"error": fmt.Sprintf("unauthorized: %v", err),
+		})
+		rw.WriteHeader(401)
 		rw.Write(msg)
 		return
 	}
@@ -159,21 +190,10 @@ func (cfg *apiConfig) handlerCreateChirp(rw http.ResponseWriter, r *http.Request
 
 	cleanedPost := strings.Join(keywordsToCheck, " ")
 
-	// Parse the user ID string to UUID
-	userID, err := uuid.Parse(chirpyPostReq.UserId)
-	if err != nil {
-		msg, _ = encodeJson(map[string]any{
-			"error": "Invalid user ID format",
-		})
-		rw.WriteHeader(400)
-		rw.Write(msg)
-		return
-	}
-
 	chirpyPost, err := cfg.db.CreateChirpy(r.Context(), database.CreateChirpyParams{
 		ID:        uuid.New(),
 		Body:      cleanedPost,
-		UserID:    userID,
+		UserID:    userUUID,
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	})
@@ -213,7 +233,7 @@ func (cfg *apiConfig) handlerCreateUser(rw http.ResponseWriter, r *http.Request)
 
 	decoder := json.NewDecoder(r.Body)
 	err := decoder.Decode(&emailReq)
-	if err != nil {
+	if err != nil || emailReq.Email == "" || emailReq.Password == "" {
 		rw.WriteHeader(400)
 		dat, _ := encodeJson(map[string]any{
 			"messages": "invalid request",
@@ -263,16 +283,20 @@ func (cfg *apiConfig) handlerCreateUser(rw http.ResponseWriter, r *http.Request)
 func (cfg *apiConfig) handlerLoginUser(rw http.ResponseWriter, r *http.Request) {
 	rw.Header().Add("Content-Type", "application/json")
 
+	// default expiry time in seconds, unless modified by the client's request
+	ExpiresInSeconds := time.Hour * 1
+
 	type LoginRequest struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
+		Email            string `json:"email"`
+		Password         string `json:"password"`
+		ExpiresInSeconds int    `json:"expires_in_seconds"`
 	}
 
 	var loginReq LoginRequest
 
 	decoder := json.NewDecoder(r.Body)
 	err := decoder.Decode(&loginReq)
-	if err != nil {
+	if err != nil || loginReq.Email == "" || loginReq.Password == "" {
 		rw.WriteHeader(400)
 		dat, _ := encodeJson(map[string]any{
 			"messages": "invalid request",
@@ -282,6 +306,11 @@ func (cfg *apiConfig) handlerLoginUser(rw http.ResponseWriter, r *http.Request) 
 	}
 
 	defer r.Body.Close()
+
+	// check if there is a passed "expiry time" via client's request, if so , set it to the default value
+	if loginReq.ExpiresInSeconds != 0 {
+		ExpiresInSeconds = time.Second * time.Duration(loginReq.ExpiresInSeconds)
+	}
 
 	user, err := cfg.db.GetUserByEmail(r.Context(), loginReq.Email)
 	if err != nil {
@@ -304,12 +333,27 @@ func (cfg *apiConfig) handlerLoginUser(rw http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	generatedToken, err := auth.MakeJWT(
+		user.ID,
+		cfg.jwtSecret,
+		ExpiresInSeconds,
+	)
+	if err != nil {
+		rw.WriteHeader(403)
+		dat, _ := encodeJson(map[string]any{
+			"messages": "couldn't generate a token for the user",
+		})
+		rw.Write(dat)
+		return
+	}
+
 	rw.WriteHeader(200)
 	dat, _ := encodeJson(map[string]any{
 		"id":         user.ID,
 		"email":      user.Email,
 		"created_at": user.CreatedAt,
 		"updated_at": user.UpdatedAt,
+		"token":      generatedToken,
 	})
 	rw.Write(dat)
 }
