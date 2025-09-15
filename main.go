@@ -18,6 +18,7 @@ type apiConfig struct {
 	db             *database.Queries
 	platform       string
 	jwtSecret      string
+	polkaKey       string
 }
 
 func main() {
@@ -42,10 +43,14 @@ func main() {
 	// JWT Secret
 	jwtSecret := os.Getenv("JWT_SECRET")
 
+	// POLKA Key => Payment Gateway
+	polkaKey := os.Getenv("POLKA_KEY")
+
 	cfg := apiConfig{
 		db:        dbQueries,
 		platform:  platform,
 		jwtSecret: jwtSecret,
+		polkaKey:  polkaKey,
 	}
 
 	mux := http.NewServeMux()
@@ -68,8 +73,10 @@ func main() {
 	mux.HandleFunc("POST /api/refresh", cfg.handlerRefreshToken)
 	mux.HandleFunc("POST /api/revoke", cfg.handlerRevokeRefreshToken)
 	mux.HandleFunc("GET /api/chirps", cfg.handlerGetChirps)
-	mux.HandleFunc("GET /api/chirps/{chirpID}", cfg.handlerGetSingleChirp)
 	mux.HandleFunc("POST /api/chirps", cfg.handlerCreateChirp)
+	mux.HandleFunc("GET /api/chirps/{chirpID}", cfg.handlerGetSingleChirp)
+	mux.HandleFunc("DELETE /api/chirps/{chirpID}", cfg.handlerDeleteChirp)
+	mux.HandleFunc("POST /api/polka/webhooks", cfg.handlerPolkaWebhooks)
 	mux.HandleFunc("GET /admin/metrics", cfg.handlerMetrics)
 	mux.HandleFunc("POST /admin/reset", cfg.handlerResetMetrics)
 

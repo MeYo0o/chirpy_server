@@ -73,7 +73,7 @@ func (cfg *apiConfig) handlerGetSingleChirp(rw http.ResponseWriter, r *http.Requ
 	}
 
 	// Parse the chirp ID string to UUID
-	chirpID, err := uuid.Parse(chirpIDStr)
+	chirpUUID, err := uuid.Parse(chirpIDStr)
 	if err != nil {
 		msg, _ := encodeJson(map[string]any{
 			"error": "Invalid chirp ID format",
@@ -84,7 +84,7 @@ func (cfg *apiConfig) handlerGetSingleChirp(rw http.ResponseWriter, r *http.Requ
 	}
 
 	// Get the chirp from database
-	chirp, err := cfg.db.GetChirpy(r.Context(), chirpID)
+	chirp, err := cfg.db.GetChirpy(r.Context(), chirpUUID)
 	if err != nil {
 		msg, _ := encodeJson(map[string]any{
 			"error": "Chirp not found",
@@ -104,6 +104,146 @@ func (cfg *apiConfig) handlerGetSingleChirp(rw http.ResponseWriter, r *http.Requ
 	})
 	rw.WriteHeader(200)
 	rw.Write(dat)
+}
+
+func (cfg *apiConfig) handlerDeleteChirp(rw http.ResponseWriter, r *http.Request) {
+	rw.Header().Add("Content-Type", "application/json")
+
+	// Extract chirpID from the URL path
+	chirpIDStr := r.PathValue("chirpID")
+	if chirpIDStr == "" {
+		msg, _ := encodeJson(map[string]any{
+			"error": "Missing chirp ID",
+		})
+		rw.WriteHeader(400)
+		rw.Write(msg)
+		return
+	}
+
+	userToken, err := auth.GetBearerToken(r.Header)
+	if err != nil || userToken == "" {
+		msg, _ := encodeJson(map[string]any{
+			"error": "unauthorized: invalid user JWT",
+		})
+		rw.WriteHeader(401)
+		rw.Write(msg)
+		return
+	}
+
+	userUUID, err := auth.ValidateJWT(userToken, cfg.jwtSecret)
+	if err != nil {
+		msg, _ := encodeJson(map[string]any{
+			"error": fmt.Sprintf("unauthorized: %v", err),
+		})
+		rw.WriteHeader(401)
+		rw.Write(msg)
+		return
+	}
+
+	// Parse the chirp ID string to UUID
+	chirpUUID, err := uuid.Parse(chirpIDStr)
+	if err != nil {
+		msg, _ := encodeJson(map[string]any{
+			"error": "Invalid chirp ID format",
+		})
+		rw.WriteHeader(400)
+		rw.Write(msg)
+		return
+	}
+
+	_, err = cfg.db.GetChirpyByUserID(r.Context(), database.GetChirpyByUserIDParams{
+		ID:     chirpUUID,
+		UserID: userUUID,
+	})
+	if err != nil {
+		msg, _ := encodeJson(map[string]any{
+			"error": "chirp not found",
+		})
+		rw.WriteHeader(403)
+		rw.Write(msg)
+		return
+	}
+
+	err = cfg.db.DeleteChirp(r.Context(), database.DeleteChirpParams{
+		ID:     chirpUUID,
+		UserID: userUUID,
+	})
+	if err != nil {
+		msg, _ := encodeJson(map[string]any{
+			"error": "couldn't delete this chirpy",
+		})
+		rw.WriteHeader(403)
+		rw.Write(msg)
+		return
+	}
+
+	rw.WriteHeader(204)
+}
+
+func (cfg *apiConfig) handlerPolkaWebhooks(rw http.ResponseWriter, r *http.Request) {
+	rw.Header().Add("Content-Type", "application/json")
+
+	type WebhooksData struct {
+		UserID string `json:"user_id"`
+	}
+
+	type WebhooksRequest struct {
+		Event string       `json:"event"`
+		Data  WebhooksData `json:"data"`
+	}
+
+	var webhooksReq WebhooksRequest
+
+	// Extract the API key and validate it
+	apiKey, err := auth.GetAPIKey(r.Header)
+	if err != nil || apiKey != cfg.polkaKey {
+		rw.WriteHeader(401)
+		dat, _ := encodeJson(map[string]any{
+			"message": "unauthorized APIKey",
+		})
+		rw.Write(dat)
+		return
+	}
+
+	decoder := json.NewDecoder(r.Body)
+	err = decoder.Decode(&webhooksReq)
+	if err != nil || webhooksReq.Event == "" || webhooksReq.Data.UserID == "" {
+		rw.WriteHeader(400)
+		dat, _ := encodeJson(map[string]any{
+			"message": "invalid request",
+		})
+		rw.Write(dat)
+		return
+	}
+	defer r.Body.Close()
+
+	if webhooksReq.Event == "user.upgraded" {
+		userUUID, err := uuid.Parse(webhooksReq.Data.UserID)
+		if err != nil {
+			rw.WriteHeader(403)
+			dat, _ := encodeJson(map[string]any{"messages": "couldn't parse that userID"})
+			rw.Write(dat)
+			return
+		}
+
+		_, err = cfg.db.GetUserByID(r.Context(), userUUID)
+		if err != nil {
+			rw.WriteHeader(404)
+			dat, _ := encodeJson(map[string]any{"messages": "user not found"})
+			rw.Write(dat)
+			return
+		}
+
+		err = cfg.db.UpgradeUserToRed(r.Context(), userUUID)
+		if err != nil {
+			rw.WriteHeader(403)
+			dat, _ := encodeJson(map[string]any{"messages": "couldn't upgrade the user"})
+			rw.Write(dat)
+			return
+		}
+	}
+
+	rw.WriteHeader(204)
 }
 
 func (cfg *apiConfig) handlerCreateChirp(rw http.ResponseWriter, r *http.Request) {
@@ -271,10 +411,11 @@ func (cfg *apiConfig) handlerCreateUser(rw http.ResponseWriter, r *http.Request)
 
 	rw.WriteHeader(201)
 	dat, _ := encodeJson(map[string]any{
-		"id":         user.ID,
-		"email":      user.Email,
-		"created_at": user.CreatedAt,
-		"updated_at": user.UpdatedAt,
+		"id":            user.ID,
+		"email":         user.Email,
+		"is_chirpy_red": user.IsChirpyRed,
+		"created_at":    user.CreatedAt,
+		"updated_at":    user.UpdatedAt,
 	})
 	rw.Write(dat)
 }
@@ -348,10 +489,11 @@ func (cfg *apiConfig) handlerUpdateUser(rw http.ResponseWriter, r *http.Request)
 
 	rw.WriteHeader(200)
 	dat, _ := encodeJson(map[string]any{
-		"id":         updatedUser.ID,
-		"email":      updatedUser.Email,
-		"created_at": updatedUser.CreatedAt,
-		"updated_at": updatedUser.UpdatedAt,
+		"id":            updatedUser.ID,
+		"email":         updatedUser.Email,
+		"is_chirpy_red": updatedUser.IsChirpyRed,
+		"created_at":    updatedUser.CreatedAt,
+		"updated_at":    updatedUser.UpdatedAt,
 	})
 	rw.Write(dat)
 
@@ -446,6 +588,7 @@ func (cfg *apiConfig) handlerLoginUser(rw http.ResponseWriter, r *http.Request) 
 	dat, _ := encodeJson(map[string]any{
 		"id":            user.ID,
 		"email":         user.Email,
+		"is_chirpy_red": user.IsChirpyRed,
 		"created_at":    user.CreatedAt,
 		"updated_at":    user.UpdatedAt,
 		"token":         generatedToken,

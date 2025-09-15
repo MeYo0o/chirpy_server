@@ -21,7 +21,7 @@ INSERT INTO users (
     hashed_password
   )
 VALUES ($1, $2, $3, $4, $5)
-RETURNING id, email, hashed_password, created_at, updated_at
+RETURNING id, email, hashed_password, is_chirpy_red, created_at, updated_at
 `
 
 type CreateUserParams struct {
@@ -45,6 +45,7 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.ID,
 		&i.Email,
 		&i.HashedPassword,
+		&i.IsChirpyRed,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -61,7 +62,7 @@ func (q *Queries) DeleteUsers(ctx context.Context) error {
 }
 
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, email, hashed_password, created_at, updated_at
+SELECT id, email, hashed_password, is_chirpy_red, created_at, updated_at
 FROM users
 WHERE email = $1
 `
@@ -73,6 +74,27 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 		&i.ID,
 		&i.Email,
 		&i.HashedPassword,
+		&i.IsChirpyRed,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getUserByID = `-- name: GetUserByID :one
+SELECT id, email, hashed_password, is_chirpy_red, created_at, updated_at
+FROM users
+WHERE id = $1
+`
+
+func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (User, error) {
+	row := q.db.QueryRowContext(ctx, getUserByID, id)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.HashedPassword,
+		&i.IsChirpyRed,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -84,7 +106,7 @@ UPDATE users
 SET email = $1,
   hashed_password = $2
 WHERE id = $3
-RETURNING id, email, hashed_password, created_at, updated_at
+RETURNING id, email, hashed_password, is_chirpy_red, created_at, updated_at
 `
 
 type UpdateUserParams struct {
@@ -100,8 +122,20 @@ func (q *Queries) UpdateUser(ctx context.Context, arg UpdateUserParams) (User, e
 		&i.ID,
 		&i.Email,
 		&i.HashedPassword,
+		&i.IsChirpyRed,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const upgradeUserToRed = `-- name: UpgradeUserToRed :exec
+UPDATE users
+SET is_chirpy_red = TRUE
+WHERE id = $1
+`
+
+func (q *Queries) UpgradeUserToRed(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.ExecContext(ctx, upgradeUserToRed, id)
+	return err
 }
