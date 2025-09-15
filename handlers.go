@@ -279,6 +279,84 @@ func (cfg *apiConfig) handlerCreateUser(rw http.ResponseWriter, r *http.Request)
 	rw.Write(dat)
 }
 
+func (cfg *apiConfig) handlerUpdateUser(rw http.ResponseWriter, r *http.Request) {
+	rw.Header().Add("Content-Type", "application/json")
+
+	type UserUpdateRequest struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+
+	var userUpdateReq UserUpdateRequest
+
+	decoder := json.NewDecoder(r.Body)
+	err := decoder.Decode(&userUpdateReq)
+	if err != nil || userUpdateReq.Email == "" || userUpdateReq.Password == "" {
+		rw.WriteHeader(400)
+		dat, _ := encodeJson(map[string]any{
+			"messages": "invalid request",
+		})
+		rw.Write(dat)
+		return
+	}
+
+	defer r.Body.Close()
+
+	accessToken, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		rw.WriteHeader(401)
+		dat, _ := encodeJson(map[string]any{
+			"messages": "invalid or expired Token",
+		})
+		rw.Write(dat)
+		return
+	}
+
+	userUUID, err := auth.ValidateJWT(accessToken, cfg.jwtSecret)
+	if err != nil {
+		rw.WriteHeader(401)
+		dat, _ := encodeJson(map[string]any{
+			"messages": "no user is found with that token",
+		})
+		rw.Write(dat)
+		return
+	}
+
+	hashedPassword, err := auth.HashPassword(userUpdateReq.Password)
+	if err != nil {
+		rw.WriteHeader(403)
+		dat, _ := encodeJson(map[string]any{
+			"messages": "couldn't hash user's password",
+		})
+		rw.Write(dat)
+		return
+	}
+
+	updatedUser, err := cfg.db.UpdateUser(r.Context(), database.UpdateUserParams{
+		Email:          userUpdateReq.Email,
+		HashedPassword: hashedPassword,
+		ID:             userUUID,
+	})
+	if err != nil {
+		rw.WriteHeader(403)
+		dat, _ := encodeJson(map[string]any{
+			"messages": "couldn't update the user",
+		})
+		rw.Write(dat)
+		return
+	}
+
+	rw.WriteHeader(200)
+	dat, _ := encodeJson(map[string]any{
+		"id":         updatedUser.ID,
+		"email":      updatedUser.Email,
+		"created_at": updatedUser.CreatedAt,
+		"updated_at": updatedUser.UpdatedAt,
+	})
+	rw.Write(dat)
+
+}
+
 func (cfg *apiConfig) handlerLoginUser(rw http.ResponseWriter, r *http.Request) {
 	rw.Header().Add("Content-Type", "application/json")
 
