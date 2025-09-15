@@ -65,18 +65,24 @@ func main() {
 	mux.Handle("/app/", cfg.middlewareMetricsInc(handlerHome))
 	mux.HandleFunc("/app/assets/logo.png", handlerLogo)
 
-	// API related
+	// --------------------- API related ----------------
+	// check server health
 	mux.HandleFunc("GET /api/healthz", handlerHealth)
+	// auth
 	mux.HandleFunc("POST /api/users", cfg.handlerCreateUser)
 	mux.HandleFunc("PUT /api/users", cfg.handlerUpdateUser)
 	mux.HandleFunc("POST /api/login", cfg.handlerLoginUser)
+	// token
 	mux.HandleFunc("POST /api/refresh", cfg.handlerRefreshToken)
 	mux.HandleFunc("POST /api/revoke", cfg.handlerRevokeRefreshToken)
+	// chirps
 	mux.HandleFunc("GET /api/chirps", cfg.handlerGetChirps)
 	mux.HandleFunc("POST /api/chirps", cfg.handlerCreateChirp)
 	mux.HandleFunc("GET /api/chirps/{chirpID}", cfg.handlerGetSingleChirp)
 	mux.HandleFunc("DELETE /api/chirps/{chirpID}", cfg.handlerDeleteChirp)
+	// payment gateway
 	mux.HandleFunc("POST /api/polka/webhooks", cfg.handlerPolkaWebhooks)
+	// admin
 	mux.HandleFunc("GET /admin/metrics", cfg.handlerMetrics)
 	mux.HandleFunc("POST /admin/reset", cfg.handlerResetMetrics)
 

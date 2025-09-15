@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -31,15 +32,61 @@ func handlerHealth(rw http.ResponseWriter, r *http.Request) {
 func (cfg *apiConfig) handlerGetChirps(rw http.ResponseWriter, r *http.Request) {
 	rw.Header().Add("Content-Type", "application/json")
 
-	chirps, err := cfg.db.GetChirps(r.Context())
-	if err != nil {
-		msg, _ := encodeJson(map[string]any{
-			"messages": fmt.Sprintf("couldn't fetch users: %v", err),
-		})
-		rw.WriteHeader(403)
-		rw.Write(msg)
-		return
+	var chirps []database.Chirp
+	var err error
+	var sort string = "asc"
+
+	// [Optional] when providing author_id/user_id && sort
+	urlValues := r.URL.Query()
+
+	// we set the sort with the optional provided sort if it's valid
+	optionalSort := strings.ToLower(urlValues.Get("sort"))
+	if optionalSort != "" && (optionalSort == "asc" || optionalSort == "desc") {
+		sort = optionalSort
 	}
+
+	// we get all chirps/posts of that provided author_id/user_id
+	authorID := urlValues.Get("author_id")
+	if authorID != "" {
+		userUUID, err := uuid.Parse(authorID)
+		if err != nil {
+			msg, _ := encodeJson(map[string]any{
+				"messages": "user not found",
+			})
+			rw.WriteHeader(404)
+			rw.Write(msg)
+			return
+		}
+
+		chirps, err = cfg.db.GetChirpsByUserID(r.Context(), userUUID)
+		if err != nil {
+			msg, _ := encodeJson(map[string]any{
+				"messages": fmt.Sprintf("couldn't fetch chirps: %v", err),
+			})
+			rw.WriteHeader(403)
+			rw.Write(msg)
+			return
+		}
+	} else {
+		chirps, err = cfg.db.GetChirps(r.Context())
+		if err != nil {
+			msg, _ := encodeJson(map[string]any{
+				"messages": fmt.Sprintf("couldn't fetch chirps: %v", err),
+			})
+			rw.WriteHeader(403)
+			rw.Write(msg)
+			return
+		}
+	}
+
+	// sort chirps slice in memory in terms of "created_at"
+	slices.SortFunc(chirps, func(a, b database.Chirp) int {
+		if sort == "asc" {
+			return a.CreatedAt.Compare(b.CreatedAt)
+		}
+
+		return b.CreatedAt.Compare(a.CreatedAt)
+	})
 
 	chirpsResponseJson := make([]map[string]string, len(chirps))
 	for i, chirpy := range chirps {

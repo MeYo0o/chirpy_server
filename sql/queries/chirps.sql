@@ -10,6 +10,11 @@ ORDER BY created_at ASC;
 SELECT *
 From chirps
 WHERE id = $1;
+-- name: GetChirpsByUserID :many
+SELECT *
+FROM chirps
+WHERE user_id = $1
+ORDER BY created_at ASC;
 -- name: GetChirpyByUserID :one
 SELECT *
 FROM chirps
